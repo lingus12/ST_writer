@@ -380,7 +380,7 @@ h1,h2,h3,.side .logo h1{font-family:var(--display);letter-spacing:-.3px}
 <aside class="side">
   <div class="logo">
     <h1>성취평가 결과분석<br>및 세특 작성기</h1>
-    <div class="sub">수행·정기시험·성취수준 기반<br>v1.0.0 정식 · 오프라인용</div>
+    <div class="sub">수행·정기시험·성취수준 기반<br>v1.0.1 정식 (26.07.18.) · 오프라인용</div>
     <button class="btn ghost sm" style="margin-top:9px;width:100%;font-size:11px;color:#fff;border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.08)" onclick="showCover()">⌂ 홈으로</button>
     <div style="margin-top:10px;border-top:1px solid rgba(255,255,255,.14);padding-top:9px;font-size:13.5px;font-weight:600;letter-spacing:.2px;color:var(--side-ink);opacity:.96">제작 · 일산동고 <b style="font-size:14.5px">최진영</b><br><span style="font-weight:400;font-size:11px;opacity:.85">fakemilk@korea.kr</span><br><span style="font-weight:400;font-size:10.5px;opacity:.7">Claude(Anthropic) 기반 개발</span></div>
   </div>
@@ -3431,7 +3431,7 @@ function ruleGenerate(hak,fresh){
     // 5) 수행 과제 기대수준/루브릭(최대 2)
     const scored=S.tasks.map((t,i)=>({t:normalizeTask(t),i,score:p.scores[i],lv:taskLevelOf(p.scores[i],t)})).filter(x=>x.lv&&x.lv!=='미이수');
     scored.sort((a,b)=>LVS.indexOf(a.lv)-LVS.indexOf(b.lv));
-    scored.slice(0,2).forEach((x)=>{
+    scored.forEach((x)=>{ /* 점수가 있는 모든 수행과제를 각 1문장 이상 반영 (기존: 상위 2개만) */
       const seg=[]; const exp=expFor(x.t,x.lv);
       const hasCmt=!!(p.taskKw&&p.taskKw[x.i]&&String(p.taskKw[x.i]).trim());
       const opener=x.t.opener||( x.t.title?("'"+x.t.title+"'에서"):'' );
@@ -3456,6 +3456,11 @@ function ruleGenerate(hak,fresh){
         const src=exp||(x.t.rubrics||[]).map(rr=>rr.title).filter(Boolean).join(' ');
         const ls=levelSummary(src,x.lv,fresh,selKw);
         if(ls&&(!NEGRE.test(ls)||x.lv==='D'||x.lv==='E'))seg.push(ls+'.');
+        if(!seg.length){ /* 최종 폴백 — 채점 요소 제목 기반 중립 서술로 과제 언급 보장 */
+          const rt=(x.t.rubrics||[]).map(rr=>String(rr.title||'').trim().replace(/하기$/,'')).filter(Boolean).slice(0,2);
+          const pred=x.lv==='A'?'우수한 수준으로 수행함':x.lv==='B'?'충실히 수행함':x.lv==='C'?'적절하게 수행함':'기초 수준에서 수행하며 보완해 가고 있음';
+          seg.push((rt.length?natJoin(rt)+' 요소를 ':'과제의 주요 요구 사항을 ')+pred+'.');
+        }
       }
       if(seg.length){ if(opener&&!hasCmt)seg[0]=opener+' '+seg[0]; parts.push(seg.join(' ')); }
     });
@@ -3543,7 +3548,21 @@ function ruleGenerate(hak,fresh){
   const usedC={}; sents=sents.map((s,idx)=>{ const m=s.match(/^(또한|그리고|나아가|아울러|한편|더불어|특히|이와\s*함께)[,\s]+/); if(m){ if(idx===0||usedC[m[1]]){ s=s.slice(m[0].length); } else usedC[m[1]]=1; } return s; });
   let full=sents.join(' ').replace(/\s*·\s*/g,', ').replace(/\s+\./g,'.').replace(/\.\s*\./g,'.').replace(/\s{2,}/g,' ').trim();
   full=full.replace(/(([가-힣]{2,6}) \2)(?=[\s,.])/g,'$2'); // '기초 개념 ... 기초' 류 즉시 중복어 축약
-  return compress(full,budget);
+  const _out=compress(full,budget);
+  /* 미반영 진단: 재료(점수 또는 코멘트)가 있는 과제가 결과에 언급되지 않으면 기록 */
+  try{
+    const miss=[];
+    S.tasks.forEach((t,i)=>{
+      const hasScore=!(p.scores[i]===''||p.scores[i]==null||isNaN(parseFloat(p.scores[i])));
+      const hasCmtI=!!(p.taskKw&&p.taskKw[i]&&String(p.taskKw[i]).trim());
+      if(!hasScore&&!hasCmtI)return;
+      const title=String(t.title||'').trim(); if(!title)return;
+      const key=title.replace(/[\s'\"()]/g,'').slice(0,5);
+      if(key&&_out.replace(/[\s'\"()]/g,'').indexOf(key)<0)miss.push('수행'+(i+1)+' \u201c'+title+'\u201d');
+    });
+    if(r)r.missTasks=miss;
+  }catch(e){}
+  return _out;
 }
 /* =================== 외부 AI: 프롬프트 복사 방식만 지원 (v1.1.0 — 직접 연동 코드 전체 제거) =================== */
 function buildFewshot(){
@@ -3562,7 +3581,8 @@ async function genTargets(haks,fresh,label){
     const sz=sanitize(draft); r.out=compress(sz.out,1500); r.banHits=scanBanned(r.out); done++;
   }
   renderSetuk(); persist();
-  toast(done+'명 '+(label||'생성'));
+  const missN=haks.filter(h=>{const rr=S.roster.find(x=>x.hak===h);return rr&&rr.missTasks&&rr.missTasks.length;}).length;
+  toast(done+'명 '+(label||'생성')+(missN?(' · \u26a0 '+missN+'명은 일부 수행과제가 언급되지 않음(분량·점수 확인)'):''));
 }
 function targetHaks(scope){
   if(scope==='all')return S.roster.map(r=>r.hak);
@@ -3710,7 +3730,8 @@ async function generateAll(fresh){
     done++;
   }
   renderSetuk();persist();
-  toast(done+'명 세특을 생성했습니다.');
+  const missN=S.roster.filter(rr=>rr.missTasks&&rr.missTasks.length).length;
+  toast(done+'명 세특을 생성했습니다.'+(missN?(' \u26a0 '+missN+'명은 일부 수행과제가 언급되지 않음(분량·점수 확인)'):''));
   navLeaf('t1');
 }
 
